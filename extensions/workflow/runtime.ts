@@ -7,10 +7,11 @@ import {
   readdirSync,
   renameSync,
   rmSync,
+  statSync,
   writeFileSync,
 } from "node:fs";
 import { homedir } from "node:os";
-import { dirname, join } from "node:path";
+import { dirname, join, resolve, sep } from "node:path";
 import vm from "node:vm";
 import type { Model, ThinkingLevel } from "@earendil-works/pi-ai";
 import {
@@ -482,6 +483,15 @@ export class WorkflowManager extends EventEmitter {
   }
 }
 
+// Resolve a script-supplied path against cwd, refusing anything that escapes it.
+function resolveInCwd(cwd: string, p: string): string {
+  const abs = resolve(cwd, p);
+  if (abs !== cwd && !abs.startsWith(cwd + sep)) {
+    throw new Error(`Workflow fs: path "${p}" escapes the working directory.`);
+  }
+  return abs;
+}
+
 export function createWorkflowTool(options: { cwd?: string; manager: WorkflowManager }) {
   const manager = options.manager;
   return defineTool({
@@ -495,7 +505,7 @@ export function createWorkflowTool(options: { cwd?: string; manager: WorkflowMan
       "Available globals are agent(prompt, opts), agent(persona, opts)(task), parallel(thunks), pipeline(items, ...stages), phase(title, optionalCallback), log(message), retry(thunk, { attempts }), gate(thunk, validator, { attempts }), checkpoint(question), budget, args, and cwd.",
       "parallel() receives functions, not promises: await parallel(items.map(item => () => agent(...))).",
       "Every agent needs a unique short label and a semantic opts.tier. End with one synthesizer agent and return a compact JSON-serializable result.",
-      "Do not use imports, require, process, filesystem APIs, Date.now, Math.random, or new Date in workflow JavaScript.",
+      "imports/require are unavailable; process is unavailable. Filesystem access is available read-only via the fs global (readFileSync/readdirSync/statSync/existsSync), confined to the current working directory.",
       "Runs are background by default. The completed result returns to the conversation automatically.",
     ],
     parameters: workflowToolSchema,
@@ -840,6 +850,15 @@ async function executeWorkflow(script: string, args: unknown, options: ExecuteOp
     return result.result;
   };
 
+  // Read-only, cwd-scoped filesystem access for workflow scripts.
+  // Write/mutating APIs are deliberately absent.
+  const fsReadOnly = {
+    readFileSync: (p: string) => readFileSync(resolveInCwd(options.cwd, p), "utf8"),
+    readdirSync: (p: string) => readdirSync(resolveInCwd(options.cwd, p)),
+    statSync: (p: string) => statSync(resolveInCwd(options.cwd, p)),
+    existsSync: (p: string) => existsSync(resolveInCwd(options.cwd, p)),
+  };
+
   const context = vm.createContext({
     agent,
     parallel,
@@ -853,6 +872,7 @@ async function executeWorkflow(script: string, args: unknown, options: ExecuteOp
     budget,
     args,
     cwd: options.cwd,
+    fs: fsReadOnly,
     console: Object.freeze({ log }),
   });
   const executable = new vm.Script(`(async () => {\n"use strict";\n${body}\n})()`, {

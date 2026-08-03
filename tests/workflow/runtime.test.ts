@@ -233,4 +233,45 @@ return { first, second };
     assert.equal(calls, 3, "the first agent should replay from cache during resume");
     assert.equal(manager.listRuns()[0].status, "completed");
   });
+
+  it("exposes a read-only, cwd-scoped fs to workflow scripts", async () => {
+    const root = mkdtempSync(join(tmpdir(), "workflow-rofs-"));
+    roots.push(root);
+    writeFileSync(join(root, "chapters.txt"), "ch1.txt\nch2.txt\n");
+
+    const manager = new WorkflowManager({
+      cwd: root,
+      runsDir: join(root, "runs"),
+      agent: async (prompt) => ({ output: `done:${prompt}`, model: "test/model:low", tokens: 1, cost: 0 }),
+    });
+
+    // In-cwd reads work and return strings; write APIs are absent.
+    const readScript = `export const meta = { name: "rofs_read", description: "read test" };
+await agent("noop", { label: "noop", tier: "scout" });
+const text = fs.readFileSync("chapters.txt");
+const entries = fs.readdirSync(".");
+const exists = fs.existsSync("chapters.txt");
+const stats = fs.statSync("chapters.txt");
+return {
+  text,
+  hasFile: entries.includes("chapters.txt"),
+  exists,
+  isFile: stats.isFile(),
+  writeApi: typeof fs.writeFileSync,
+};
+`;
+    const readResult = await manager.runSync(readScript);
+    assert.equal(readResult.result.text, "ch1.txt\nch2.txt\n");
+    assert.equal(readResult.result.hasFile, true);
+    assert.equal(readResult.result.exists, true);
+    assert.equal(readResult.result.isFile, true);
+    assert.equal(readResult.result.writeApi, "undefined");
+
+    // Paths escaping cwd are rejected.
+    const escapeScript = `export const meta = { name: "rofs_escape", description: "escape test" };
+await agent("noop", { label: "noop", tier: "scout" });
+return fs.readFileSync("../outside.txt");
+`;
+    await assert.rejects(manager.runSync(escapeScript), /escapes the working directory/);
+  });
 });
