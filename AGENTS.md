@@ -65,3 +65,25 @@ Run a single test file:
 node --import tsx --test tests/sessions.test.ts
 node --import tsx --test tests/ask-user/tool.test.ts
 ```
+
+## Local Development (fork)
+
+This fork is installed as a Pi package from git:
+
+```bash
+pi install git:github.com/megaSukura/pi-agent-extensions
+```
+
+The install clone lives at `~/.pi/agent/git/github.com/megaSukura/pi-agent-extensions` and **is the single development copy** — edit it directly, never maintain a second working clone elsewhere (divergence risk).
+
+Development loop:
+
+```bash
+# edit files in this clone
+npm test                     # run the test suite
+git add -A && git commit -m "..." && git push origin main
+pi update --extensions       # reconcile the install clone (no-op if already pushed)
+# restart pi to load the new code
+```
+
+Note: this fork extends the workflow extension with a read-only, cwd-scoped `fs` global (`readFileSync`/`readdirSync`/`statSync`/`existsSync`) available to workflow scripts. Keep tests in `tests/workflow/` green when touching `extensions/workflow/`.
